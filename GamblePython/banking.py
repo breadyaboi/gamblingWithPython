@@ -1,6 +1,8 @@
 class BankAccount:
+    initial_amount = 0
     def __init__(self, balance):
         self.balance = balance
+        self.initial_amount = balance
     def show_balance(self):
         return self.balance
     def add_balance(self, amount):
@@ -11,3 +13,14 @@ class BankAccount:
         if self.balance <= 0:
             return True
         return False
+    def reset_balance(self):
+        self.balance = self.initial_amount
+    def betting_amount(self, statement):
+        amount = 0
+        while amount <= 0:
+            print(statement)
+            amount = int(input('> '))
+            if(amount <= 0):
+                print("Please input a valid amount of money.")
+            else:
+                return amount
