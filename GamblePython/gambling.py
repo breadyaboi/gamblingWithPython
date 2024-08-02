@@ -138,51 +138,131 @@ class Poker:
             case 5:
                 return
 class Roulette_wheel:
-    reds = [str(s) + " Red" for s in [9, 30, 7, 32, 5, 34, 3, 36, 1, 27, 25, 12, 19, 18, 21, 16, 23, 14]]
-    blacks = [str(s) + " Black" for s in [28, 26, 11, 20, 17, 22, 15, 24, 13, 10, 29, 8, 31, 6, 33, 4, 35, 2]]
+    red_nums = [9, 30, 7, 32, 5, 34, 3, 36, 1, 27, 25, 12, 19, 18, 21, 16, 23, 14]
+    black_nums = [28, 26, 11, 20, 17, 22, 15, 24, 13, 10, 29, 8, 31, 6, 33, 4, 35, 2]
+    reds = [str(s) + " Red" for s in red_nums]
+    blacks = [str(s) + " Black" for s in black_nums]
     probability = 7400
     def __init__(self):
         self.roulette_wheel = random.shuffle(self.blacks + self.reds + ["0 Green", "00 Green"])
     def roll_wheel(self):
         landing = random.randint(0, self.probability) % 37
         print("You landed on", self.roulette_wheel[landing])
+    def black_rolls(self):
+        return self.black_nums
+    def red_rolls(self):
+        return self.red_nums
 class Roulette:
+    bets = []
+    table_values = []
     def __init__(self):
         wheel = Roulette_wheel()
-        print("Your current balance is $", balance.show_balance())
-        money = balance.betting_amount("How much money do you want to bet?")
-        self.print_table()
-        while money > 0:
-            print("What do you want to bet on? ([Dollar Amount] Black/Red/Green/Odds/Evens) Gamble amount left:", money)
-            roll = input('> ')
-        wheel.roll_wheel()
-    def parse_bet(self, bet):
-        parseBet = bet.split()
-    def roulette_rules(self):
-        print("")
-    def print_table(self):#prints an ascii visualization of a roulette table, will cover whatever spot the player bets on
-        roulette_table = list(range(37))
-        twelves_bet = ["1st 12", "2nd 12", "3rd 12"]
-        outside_bet = ["1-18", "EVEN", "RED", "BLACK", "ODD", "19-36"]
+        self.roulette_rules()
+        while balance.is_neg() == False:
+
+            print("Your current balance is $", balance.show_balance())
+            money = balance.betting_amount("How much money do you want to bet?")
+            self.table_values = self.create_table_values()
+            self.bets = []
+            roulette_table(self.table_values, self.bets)
+            bet_amount = 6
+            while money > 0 and bet_amount > 0:
+                print("What do you want to bet on? Gamble amount left:", money, "\nBets left:", bet_amount)
+                roll = input('> ').lower()
+                if self.parse_bet(roll) == True:
+                    roll = roll.split()
+                    money = money - int(roll[0])
+                    bet_amount = bet_amount - 1
+                    print(self.bets)
+                    roulette_table(self.table_values, self.bets)
+                else:
+                    print("Please follow the syntax listed above")
+            wheel.roll_wheel()
+            
+            if play_game("Do you wish to play another game?: (Yes/No)") == False:
+                break
+    def parse_bet(self, roll):#parses the users input
+        if self.verify_bet(roll) == True:
+            checkInt = roll.split()
+            checkInt = checkInt[1:]
+            check_bet = ' '.join(checkInt)
+            rolls = check_bet.split(", ")
+            if len(rolls) > 1:
+                    inside_bets = []
+                    for i in range(len(rolls)):
+                        if i == 6:
+                            break
+                        else:
+                            if rolls[i] in self.table_values[0]:
+                                inside_bets.append(rolls[i])
+                                print(rolls[i])
+                            else:
+                                return False
+                    self.bets.append(inside_bets)    
+            else:
+                self.bets.append(rolls[0])
+            return True
+        else:
+            return False
+    def verify_bet(self, roll):
+        checkInt = roll.split()
+        try:
+            int(checkInt[0])#checks if the dollar amount is an integer
+            checkInt = checkInt[1:]
+            check_bet = ' '.join(checkInt)
+            rolls = check_bet.split(", ")
+            for i in range(4):
+                if rolls[0] in self.table_values[i]:
+                    return True
+            return False
+        except:
+            return False
+    def roulette_rules(self):#prints the rules of roulette
+        print("RULES:")
+        print("Maximum of 6 bets (Remainder will go back into balance) OR bet until inputted amount is 0 ")
+        print("TYPES OF BETS:")
+        print("\"INSIDE\" BETS")
+        print("Straight-up number bet Syntax: [Dollar amount] [int] (37 to 1)")
+        print("Split number bet Syntax: [Dollar amount] [int, int] (17 to 1)")
+        print("Street bet Syntax: [Dollar amount] [int, int, int] (11 to 1)")
+        print("Corner bet Syntax: [Dollar amount] [int, int, int, int] (8 to 1)")
+        print("5-line bet Syntax: [Dollar amount] [int, int, int, int, int] (6 to 1)")
+        print("6-line bet Syntax: [Dollar amount] [int, int, int, int, int, int] (5 to 1)")
+        print("\"OUTSIDE\" BETS")
+        print("Color betting syntax: [Dollar amount] [Red OR Black] (1 to 1)")
+        print("Even or odd betting syntax: [Dollar amount] [Even OR Odd] (1 to 1)")
+        print("Column betting syntax: [Dollar amount] [1st row OR 2nd row OR 3rd row] (2 to 1)")
+        print("Dozen betting syntax: [Dollar amount] [1st 12 OR 2nd 12 OR 3rd 12] (2 to 1)")
+        print("High-or-Low bet syntax: [Dollar amount] [1-18 OR 19-36] (1 to 1)")
+    def create_table_values(self):
+        total_table = []
+        total_table.append([str(i) for i in range(37)])#inside bets
+        total_table.append(["1st 12", "2nd 12", "3rd 12"])#outside bet row 1
+        total_table.append(["1-18", "even", "red", "black", "odd", "19-36"]) #outside bet row 2
+        total_table.append(["1st row", "2nd row", "3rd row"]) #outside bet row 3
+        return total_table
+
+class roulette_table:
+    def __init__(self, table_values, bets):#prints an ascii visualization of a roulette table, will cover whatever spot the player bets on
         #first row
         for i in range(74):
             sys.stdout.write("_")
         sys.stdout.write("\n< 00 | ")
-        for i in roulette_table[3::3]:
-            sys.stdout.write(str(i) + " | " )
-        sys.stdout.write(" 3rd row |\n")
+        for i in table_values[0][3::3]:
+            sys.stdout.write(i + " | " )
+        sys.stdout.write(" " + table_values[3][2] +" |\n")
         self.print_table_lines()
         #second row
         sys.stdout.write("|    | ")
-        for i in roulette_table[2::3]:
-            sys.stdout.write(str(i) + " | ")
-        sys.stdout.write(" 2nd row |\n")
+        for i in table_values[0][2::3]:
+            sys.stdout.write(i + " | ")
+        sys.stdout.write(" " + table_values[3][1] +" |\n")
         self.print_table_lines()
         #third row
         sys.stdout.write("< 0  | ")
-        for i in roulette_table[1::3]:
-            sys.stdout.write(str(i) + " | ")
-        sys.stdout.write(" 1st row |\n")
+        for i in table_values[0][1::3]:
+            sys.stdout.write(i + " | ")
+        sys.stdout.write(" " + table_values[3][0] +" |\n")
         for i in range(74):
             if i in [5, 22, 42, 62]:
                 sys.stdout.write("|")
@@ -190,7 +270,7 @@ class Roulette:
                 sys.stdout.write("‾")
         #fourth row
         sys.stdout.write("\n     |")
-        for i in twelves_bet:
+        for i in table_values[1]:
             if i == "1st 12":
                 sys.stdout.write("    " + i + "      |")
             else:
@@ -207,17 +287,17 @@ class Roulette:
         for i in range(6):
             match i:
                 case 0:
-                    sys.stdout.write(" " + outside_bet[i] + "  |")
+                    sys.stdout.write(" " + table_values[2][i] + "  |")
                 case 1:
-                    sys.stdout.write("  " + outside_bet[i] + "  |")
+                    sys.stdout.write("  " + table_values[2][i].upper() + "  |")
                 case 2:
-                    sys.stdout.write("   " + outside_bet[i] + "   |")
+                    sys.stdout.write("   " + table_values[2][i].upper() + "   |")
                 case 3:
-                    sys.stdout.write("  " + outside_bet[i] + "  |")
+                    sys.stdout.write("  " + table_values[2][i].upper() + "  |")
                 case 4:
-                    sys.stdout.write("   " + outside_bet[i] + "   |")
+                    sys.stdout.write("   " + table_values[2][i].upper() + "   |")
                 case 5:
-                    sys.stdout.write("  " + outside_bet[i] + "  |")
+                    sys.stdout.write("  " + table_values[2][i] + "  |")
         #seventh row
         sys.stdout.write("\n     ")
         for i in range(58):
@@ -243,6 +323,7 @@ class Roulette:
         for i in range(10):
             sys.stdout.write("-")
         print("|")
+    
         
         
 

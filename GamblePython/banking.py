@@ -19,8 +19,11 @@ class BankAccount:
         amount = 0
         while amount <= 0:
             print(statement)
-            amount = int(input('> '))
-            if(amount <= 0):
+            try:
+                amount = int(input('> '))
+                if(amount <= 0):
+                    print("Please input a valid amount of money.")
+                else:
+                    return amount
+            except:
                 print("Please input a valid amount of money.")
-            else:
-                return amount
