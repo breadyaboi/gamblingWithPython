@@ -287,8 +287,8 @@ class Roulette:
         for j in range(len(bets)):
             toInt = int(bets[j])
             if toInt == number:
-                bet_money = bet_money * multiplier
-        if bet_money == original_money:
+                bet_money = int(bet_money) * multiplier
+        if bet_money == int(original_money):
             bet_money = 0
         return bet_money
     def roulette_rules(self):#prints the rules of roulette
