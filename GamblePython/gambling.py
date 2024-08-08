@@ -166,6 +166,8 @@ class Roulette:
         while balance.is_neg() == False:
             print("Your current balance is $", balance.show_balance())
             money = balance.betting_amount("How much money do you want to bet?")
+            initial_loss = money #records the initial amount lost
+            balance.sub_balance(money)#player immediately loses money upon losing but will win it back
             self.table_values = self.create_table_values()
             self.bets = []
             bet_money = []
@@ -179,16 +181,22 @@ class Roulette:
                     money = money - int(roll[0])
                     bet_money.append(roll[0])
                     bet_amount = bet_amount - 1
-                    print(self.bets)
-                    print(bet_money)
                     roulette_table(self.table_values, self.bets)
                 else:
                     print("Please follow the syntax listed above")
             landed = self.wheel.roll_wheel()
-            print(landed)
-            self.calculate_bets(landed, bet_money)
+            print("You have landed on:", landed)
+            landed = landed.split()
+            money_earned = self.calculate_bets(landed, bet_money) - initial_loss
+            print("You have earned: $", money_earned)
+            balance.add_balance(money_earned)
             if play_game("Do you wish to play another game?: (Yes/No)") == False:
                 break
+        if balance.is_neg() == True:
+            if play_game("You have run out of money, do you wish to restart? (Yes / No)") == False:
+                leave_game()
+            else:
+                balance.reset_balance()
     def parse_bet(self, roll):#parses the users input
         if self.verify_bet(roll) == True:
             checkInt = roll.split()
@@ -237,9 +245,52 @@ class Roulette:
         except:
             return False
     def calculate_bets(self, roll, bet_money):
+        number = int(roll[0])
+        color = roll[1].lower()
         for i in range(len(self.bets)):
-            if len(self.bets[i]) > 1:
-                return True
+            if isinstance(self.bets[i], list) == True:#if the element is a list, it is assumed to be multiple numbers
+                match len(self.bets[i]):
+                    case 2:
+                        bet_money[i] = self.calculate_inside(bet_money[i], self.bets[i], 17, number)
+                    case 3:
+                        bet_money[i] = self.calculate_inside(bet_money[i], self.bets[i], 11, number)
+                    case 4:
+                        bet_money[i] = self.calculate_inside(bet_money[i], self.bets[i], 8, number)
+                    case 5:
+                        bet_money[i] = self.calculate_inside(bet_money[i], self.bets[i], 6, number)
+                    case 6:
+                        bet_money[i] = self.calculate_inside(bet_money[i], self.bets[i], 5, number)
+            else:
+                if (self.bets[i] == "red" and color == "red") or (self.bets[i] == "black" and color == "black"):
+                    bet_money[i] = int(bet_money[i]) * 2
+                elif (self.bets[i] == "even" and number % 2 == 0) or (self.bets[i] == "odd" and number % 2 == 1) and number != 0: 
+                    bet_money[i] = int(bet_money[i]) * 2 # 1 to 1 payout
+                elif (self.bets[i] == "1st 12" and number in range(0, 13)) or (self.bets[i] == "2nd 12" and number in range(12, 25)) or (self.bets[i] == "3rd 12" and number in range(24, 37)):
+                    bet_money[i] = int(bet_money[i]) * 3 # 2 to 1 payout
+                elif (self.bets[i] == "1st row" and number in range(1, 35, 3)) or (self.bets[i] == "2nd row" and number in range(2, 36, 3)) or (self.bets[i] == "3rd row" and number in range(3, 37, 3)):  
+                    bet_money[i] = int(bet_money[i]) * 3
+                elif (self.bets[i] == "1-18" and number in range(1, 19)) or (self.bets[i] == "19-36" and number in range(19, 37)):  
+                    bet_money[i] = int(bet_money[i]) * 3
+                elif (self.bets[i] == str(number)):
+                    bet_money[i] == int(bet_money[i]) * 36 # 35 to 1 payout
+                elif (self.bets[i] == "green" and number == "00" or number == "0"):
+                    bet_money[i] = int(bet_money[i]) * 35
+                else:
+                    bet_money[i] = 0
+        total_money = 0
+        for i in range(len(bet_money)):
+            total_money = total_money + int(bet_money[i])
+        return total_money
+                                                    
+    def calculate_inside(self, bet_money, bets, multiplier, number):
+        original_money = bet_money
+        for j in range(len(bets)):
+            toInt = int(bets[j])
+            if toInt == number:
+                bet_money = bet_money * multiplier
+        if bet_money == original_money:
+            bet_money = 0
+        return bet_money
     def roulette_rules(self):#prints the rules of roulette
         print("RULES:")
         print("Maximum of 6 bets (Remainder will go back into balance) OR bet until inputted amount is 0 ")
@@ -263,8 +314,8 @@ class Roulette:
         total_table.append(["1st 12", "2nd 12", "3rd 12"])#outside bet row 1
         total_table.append(["1-18", "even", "red", "black", "odd", "19-36"]) #outside bet row 2
         total_table.append(["1st row", "2nd row", "3rd row"]) #outside bet row 3
-        total_table.append(["0", "00"])
-        total_table.append("green")
+        total_table.append(["0", "00"])# green
+        total_table.append("green")#here for clarity and not shown on table
         return total_table
 
 class roulette_table:
