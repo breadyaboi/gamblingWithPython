@@ -127,15 +127,9 @@ class Poker:
         hand.append(deck.draw_card())
         return hand
     def poker_opponent(self, hand):
-        match len(hand):
-            case 2:
-                return "call"
-            case 3:
-                return
-            case 4:
-                return
-            case 5:
-                return
+        decision = 1
+        if(decision == 1):
+            return "call"
 class Roulette_wheel:
     red_nums = [9, 30, 7, 32, 5, 34, 3, 36, 1, 27, 25, 12, 19, 18, 21, 16, 23, 14]
     black_nums = [28, 26, 11, 20, 17, 22, 15, 24, 13, 10, 29, 8, 31, 6, 33, 4, 35, 2]
