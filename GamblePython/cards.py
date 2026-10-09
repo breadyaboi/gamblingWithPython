@@ -12,7 +12,6 @@ class Card:
 class Deck:
     suits = ['Hearts', 'Diamonds', 'Clubs', 'Spades']
     ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'Jack', 'Queen', 'King', 'Ace']
-
     def __init__(self):
         self.cards = [Card(suit, rank) for suit in self.suits for rank in self.ranks]#creates a deck of cards by making as many unique combinations of suits and ranks (4x13 = 52 cards)
 
@@ -33,6 +32,8 @@ class Deck:
         else:
             return int(card)  # Convert card to integer
     def translate_rank(self, rank): # Reads the rank and returns the first letter
+        if rank == "10":
+            return "10"
         return rank[0]
     def translate_suit(self, suit): # Reads the suit of the card and returns the corresponding symbol
         match suit:
@@ -60,7 +61,7 @@ class Deck:
         for i in cards:
             sys.stdout.write(" ‾‾‾‾‾  ")
         sys.stdout.write("\n") 
-    def create_hand(self, cards): # Creates an ASCII version of the player's hand 
+    def create_hand(self, cards: list):
         for i in cards:
             sys.stdout.write(" _____  ")
         sys.stdout.write("\n") 
@@ -78,8 +79,18 @@ class Deck:
         sys.stdout.write("\n") 
         for i in cards:
             sys.stdout.write(" ‾‾‾‾‾  ")
-        sys.stdout.write("\n") 
+        return "\n"
 
     def __str__(self):#returns how many cards are left in the deck
         return f'Deck of {len(self.cards)} cards'
+
+'''deck = Deck()
+deck.shuffle()
+card = deck.draw_card()
+hand = []
+hand.append(card)
+hand.append(deck.draw_card())
+for i in hand:
+    print(i)
+print(deck.create_hand(hand))'''
     

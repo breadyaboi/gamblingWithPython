@@ -31,10 +31,11 @@ class Blackjack:
                 if move == "hit" or move == "double":
                     playerDraw = deck.draw_card()
                     print("You drew", playerDraw)
+                    deck.create_hand([playerDraw])
                     player = player + deck.calculate_card(playerDraw.rank)
                     if player <= 21:
                         compDraw = deck.draw_card()
-                        print("Dealer draws", compDraw)
+                        print("Dealer draws", deck.create_hand([compDraw]))
                         comp = comp + deck.calculate_card(compDraw.rank)
                 elif move == "stand":
                     compDraw = deck.draw_card()
