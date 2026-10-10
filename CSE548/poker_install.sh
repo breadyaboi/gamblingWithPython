@@ -1,49 +1,59 @@
 #!/bin/bash
-# poker_install.sh
-# ================
-# Set up the dealer account, directories, and all player accounts.
-# Run from the directory containing the poker game files.
+# poker_install.sh  (Unix domain socket edition)
+# ===============================================
+# Set up the dealer account, player accounts, and game files.
+# No named pipes — communication uses a Unix domain socket.
 #
-# Requires: sudo access
-# Mirrors the structure of Virtual Werewolves install.sh
+# Usage:  sudo bash poker_install.sh [num_players]
+# Default num_players: 16
 
 set -e
 
-echo "[install] Creating dealer account..."
-sudo adduser --disabled-password --gecos "" dealer 2>/dev/null || true
+NUM_PLAYERS=${1:-16}
 
-echo "[install] Creating directory structure..."
-sudo mkdir -p /home/dealer/pipes
-sudo mkdir -p /home/dealer/log
+echo "[install] Creating dealer account..."
+adduser --disabled-password --gecos "" dealer 2>/dev/null || true
+
+echo "[install] Creating directories..."
+mkdir -p /home/dealer/sockets
+mkdir -p /home/dealer/log
 
 echo "[install] Copying game files..."
-sudo cp cards.py             /home/dealer/
-sudo cp banking.py           /home/dealer/
-sudo cp poker_communication.py /home/dealer/
-sudo cp dealer.py            /home/dealer/
-sudo cp poker_client.py      /home/dealer/
-sudo cp makepoker_users.py   /home/dealer/
+cp cards.py               /home/dealer/
+cp banking.py             /home/dealer/
+cp poker_communication.py /home/dealer/
+cp dealer.py              /home/dealer/
+cp poker_client.py        /home/dealer/
 
-sudo chmod a+x /home/dealer
+chown -R dealer:dealer /home/dealer/
+chmod  750             /home/dealer/
+chmod  750             /home/dealer/sockets/
+chmod  700             /home/dealer/log/
 
-# Create an empty log placeholder; makepoker_users.py sets final permissions
-sudo touch /home/dealer/log/dealer.log
-sudo touch /home/dealer/log/dummy.log
+echo "[install] Creating player accounts..."
+for i in $(seq 0 $((NUM_PLAYERS - 1))); do
+    USERNAME="player$i"
+    adduser --disabled-password --gecos "" "$USERNAME" 2>/dev/null || true
+    usermod -aG dealer "$USERNAME"   # add to dealer group so they can reach the socket
 
-# Set ownership of dealer home
-sudo chown -R dealer:dealer /home/dealer/
-sudo chmod 750 /home/dealer/
-sudo chmod 700 /home/dealer/log/
-sudo chmod 600 /home/dealer/log/dealer.log
-
-echo "[install] Creating player accounts and named pipes..."
-# Pass number of players as first argument, default 16
-NUM_PLAYERS=${1:-16}
-sudo python3 makepoker_users.py "$NUM_PLAYERS"
+    # Give each player their own copy of the client
+    cp /home/dealer/poker_client.py "/home/$USERNAME/"
+    cp /home/dealer/cards.py        "/home/$USERNAME/"
+    cp /home/dealer/banking.py      "/home/$USERNAME/"
+    chown "$USERNAME":"$USERNAME"   "/home/$USERNAME/poker_client.py"
+    chown "$USERNAME":"$USERNAME"   "/home/$USERNAME/cards.py"
+    chown "$USERNAME":"$USERNAME"   "/home/$USERNAME/banking.py"
+    chmod 750 "/home/$USERNAME/poker_client.py"
+    echo "[install] Created $USERNAME"
+done
 
 echo ""
-echo "[install] Done."
+echo "[install] Done.  $NUM_PLAYERS players created."
 echo ""
-echo "  Start the dealer:   sudo -u dealer python3 /home/dealer/dealer.py $NUM_PLAYERS"
-echo "  Player login:       ssh player0@localhost"
-echo "  Player client:      python3 ~/poker_client.py"
+echo "  Start dealer:   sudo -u dealer python3 /home/dealer/dealer.py $NUM_PLAYERS"
+echo "  Player login:   su - player0"
+echo "  Player client:  python3 ~/poker_client.py"
+echo ""
+echo "  To demonstrate impersonation attack:"
+echo "    python3 /home/dealer/poker_client.py --as 0"
+echo "    (connect before player 0 to receive their hole cards)"

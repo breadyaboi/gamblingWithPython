@@ -1,234 +1,292 @@
 """
-poker_communication.py
-======================
+poker_communication.py  (Unix domain socket edition)
+=====================================================
 Core I/O library for the multiplayer poker game.
 
-Architecture mirrors Virtual Werewolves (communication.py) but uses
-select.select() for asynchronous multiplexed I/O instead of one blocking
-thread per player.
+Communication model
+-------------------
+Named pipes used a *pair* of FIFOs per player (one each direction).
+Unix domain sockets replace that with a *single bidirectional stream
+socket* per player, all reached through one server socket:
 
-INTENTIONAL VULNERABILITIES (for OS-course side-channel/attack exercises):
-  readVulnerability   = 1  ->  recv() uses os.popen('cat pipe')
-                               The cat process is visible in `ps aux`,
-                               revealing *which* pipe is being read.
-  readVulnerability_2 = 1  ->  send() builds a shell command with raw
-                               player input and passes it to os.popen().
-                               Any player message containing shell
-                               metacharacters is *executed by the dealer*.
-                               Example injection: "fold; cat /home/dealer/log/dealer.log"
-  dealerLogMode       = 1  ->  init_dealer_log() calls `touch` then
-                               `chmod 700` as two separate steps.
-                               There is a race-condition window between
-                               creation (mode 0o644) and restriction
-                               (mode 0o700) where any local user can
-                               read the newly created log file.
+    /home/dealer/sockets/game.sock    ← dealer listens here
+                                         all players connect here
 
-Pipe layout (all paths under pipeRoot):
-  Player N -> Dealer:  <N>todD/<N>tod   (player writes, dealer reads)
-  Dealer -> Player N:  dto<N>D/dto<N>   (dealer writes, player reads)
+The dealer's event loop calls select() on:
+    [ server_sock ] + [ every connected player socket ]
+
+A readable server_sock means a new player is connecting (accept()).
+A readable player socket means that player sent a message (recv()).
+This is the canonical UNIX I/O-multiplexing pattern — one thread,
+no blocking, N concurrent clients.
+
+INTENTIONAL VULNERABILITIES (for OS-course attack exercises)
+--------------------------------------------------------------
+readVulnerability = 1   ← IMPERSONATION
+    Player sends READY:<id> and the dealer trusts it.
+    Any local user who can reach game.sock can connect first and
+    claim to be player 0, receiving player 0's hole cards.
+
+    Fix (readVulnerability=0): use SO_PEERCRED to read the
+    connecting process's UID from the kernel, then verify it
+    matches the claimed player account.  The kernel cannot lie.
+
+readVulnerability_2 = 1  ← COMMAND INJECTION
+    CHAT messages are logged via:
+        os.popen('echo "%s" >> chat.log' % raw_text)
+    Shell metacharacters in the message execute as the dealer.
+    Example:  CHAT:hi"; cat /home/dealer/log/dealer.log > /tmp/x;"
+
+    Fix (readVulnerability_2=0): write directly to the log file
+    with Python's open(), no shell involved.
+
+dealerLogMode = 1        ← RACE CONDITION
+    init_dealer_log() calls `touch dealer.log` (creates with
+    mode 0o644) then sleeps, then `chmod 700`.  A process that
+    opens the file in that window keeps a valid fd after chmod.
+
+    Fix (dealerLogMode=0): O_CREAT|O_WRONLY|O_TRUNC with mode
+    0o600 — never world-readable, not even briefly.
+
+socketVulnerability = 1  ← WORLD-ACCESSIBLE SOCKET
+    game.sock and its directory are created with mode 0o777.
+    Any local user can connect without being a playerN account.
+
+    Fix (socketVulnerability=0): socket directory mode 0o750,
+    game.sock mode 0o660, group=dealer — only dealer-group
+    members (the playerN accounts) can connect.
+
+TIMING SIDE CHANNEL (always present)
+    Fold path is O(1).  Call/raise involve BankAccount arithmetic
+    and, for raises, re-queuing all active players.  An attacker
+    who measures how long a player's sent message takes to be
+    echoed back (round-trip timing over the socket) can distinguish
+    fold from raise and infer hand strength.
 """
 
-import os, sys, select, time
+import os, sys, socket, select, struct, time, pwd
 
-# ── Configuration ───────────────────────────────────────────────────────────
-pipeRoot         = '/home/dealer/pipes/'
-readVulnerability   = 1   # 0 = safe direct read,   1 = VULNERABLE os.popen cat
-readVulnerability_2 = 1   # 0 = safe direct write,  1 = VULNERABLE os.popen echo (injection)
-dealerLogMode       = 1   # 0 = atomic O_CREAT,     1 = VULNERABLE touch + chmod
+# ── Configuration ────────────────────────────────────────────────────────────
+SOCKET_DIR   = '/home/dealer/sockets'
+SOCKET_PATH  = SOCKET_DIR + '/game.sock'
+CHAT_LOG     = '/home/dealer/log/chat.log'
+DEALER_LOG   = '/home/dealer/log/dealer.log'
 
-# ── Pipe path helpers ────────────────────────────────────────────────────────
-def _p2d_path(player):
-    """Path of the player→dealer FIFO."""
-    return '%s%stodD/%stod' % (pipeRoot, player, player)
-
-def _d2p_path(player):
-    """Path of the dealer→player FIFO."""
-    return '%sdto%sD/dto%s' % (pipeRoot, player, player)
+readVulnerability    = 1   # 0=SO_PEERCRED auth  1=trust self-reported ID
+readVulnerability_2  = 1   # 0=safe file write   1=VULNERABLE os.popen echo
+dealerLogMode        = 1   # 0=atomic O_CREAT    1=VULNERABLE touch+chmod
+socketVulnerability  = 1   # 0=restricted perms  1=VULNERABLE world-accessible
 
 
-# ── Send (dealer → player) ───────────────────────────────────────────────────
-def send(receiver, msg, sender='d'):
+# ── Server socket lifecycle ──────────────────────────────────────────────────
+def create_server_socket():
     """
-    Send *msg* to *receiver* (a player number) from *sender*.
+    Create and bind the Unix domain server socket.
 
-    readVulnerability_2=1 (VULNERABLE):
-        Builds a shell command string containing raw *msg* and passes it
-        directly to os.popen().  A player who sends:
-            fold; cp /home/dealer/log/dealer.log /tmp/stolen.txt
-        will have the cp command executed as the dealer user.
+    socketVulnerability=1 (VULNERABLE):
+        Directory and socket file both chmod 0o777.
+        Any local user — including untrusted processes — can connect
+        and impersonate a player.
 
-    readVulnerability_2=0 (SAFE):
-        Writes directly to the FIFO file descriptor; no shell is involved.
+    socketVulnerability=0 (SAFE):
+        Directory chmod 0o750 (dealer:dealer), socket chmod 0o660.
+        Only processes running as dealer or a group member can connect.
     """
-    pipe = str(receiver)
-    if readVulnerability_2 == 1:
+    os.makedirs(SOCKET_DIR, exist_ok=True)
+
+    # Remove stale socket from a previous run
+    try:
+        os.unlink(SOCKET_PATH)
+    except FileNotFoundError:
+        pass
+
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(SOCKET_PATH)
+    srv.listen(16)
+    srv.setblocking(False)
+
+    if socketVulnerability == 1:
         # ── VULNERABLE ────────────────────────────────────────────────────
-        # msg is raw, unsanitized player input.  Any shell metacharacter
-        # in msg (; & | ` $(...) etc.) is interpreted by /bin/sh.
-        #
-        # Original safe version (disabled in werewolves too):
-        #   safe_msg = msg.replace("'","").replace(";","").replace("&","")
-        raw = "(echo :%s:%s > %sdto%sD/dto%s) 2> /dev/null &" % (
-            sender, msg, pipeRoot, pipe, pipe)
-        o = os.popen(raw)
-        o.close()
+        os.chmod(SOCKET_DIR,  0o777)
+        os.chmod(SOCKET_PATH, 0o777)
     else:
         # ── SAFE ──────────────────────────────────────────────────────────
-        try:
-            fd = os.open(_d2p_path(pipe),
-                         os.O_WRONLY | os.O_NONBLOCK)
-            os.write(fd, (':%s:%s\n' % (sender, msg)).encode())
-            os.close(fd)
-        except OSError:
-            pass
+        os.chmod(SOCKET_DIR,  0o750)
+        os.chmod(SOCKET_PATH, 0o660)
+
+    return srv
 
 
-# ── Blocking recv (single player) ────────────────────────────────────────────
-def recv(player):
+def accept_client(srv):
+    """Accept one pending connection; return (conn_socket, None)."""
+    conn, _ = srv.accept()
+    conn.setblocking(False)
+    return conn
+
+
+# ── Authentication ────────────────────────────────────────────────────────────
+def authenticate(conn, claimed_id):
     """
-    Blocking read from a single player pipe.  Used only during the
-    connection-handshake phase before the async loop starts.
+    Verify that the connecting process is really player<claimed_id>.
 
     readVulnerability=1 (VULNERABLE):
-        Spawns `cat <pipe_path>` as a child process.
-        `ps aux` reveals the exact pipe being read, identifying which
-        player the dealer is currently waiting on.
+        Accepts the self-reported player ID without verification.
+        An attacker who connects before the real player and sends
+        READY:0 is treated as player 0.
 
     readVulnerability=0 (SAFE):
-        Opens the FIFO directly; no child process is created.
+        Reads SO_PEERCRED from the kernel.  This returns the
+        connecting process's real UID, which cannot be spoofed by
+        the client.  The UID is mapped to a username and compared
+        against "player<claimed_id>".
     """
-    pipe = str(player)
     if readVulnerability == 1:
         # ── VULNERABLE ────────────────────────────────────────────────────
-        # Child process `cat /home/dealer/pipes/NtodD/Ntod` is visible in
-        # the process table to any local user via `ps aux`.
-        o = os.popen('cat %s' % _p2d_path(pipe))
-        data = o.read().strip()
-        o.close()
-        return data
-    else:
-        # ── SAFE ──────────────────────────────────────────────────────────
-        fd = os.open(_p2d_path(pipe), os.O_RDONLY)
-        data = os.read(fd, 4096).decode().strip()
-        os.close(fd)
-        return data
+        return True   # trust whatever the client claimed
 
-
-# ── Async recv (multiple players via select) ─────────────────────────────────
-def open_player_pipes(players):
-    """
-    Open every player→dealer FIFO with O_RDONLY | O_NONBLOCK.
-
-    O_NONBLOCK means open() returns immediately even if no writer is
-    present yet (unlike a plain open() which would block).  The returned
-    file descriptors are suitable for select.select().
-
-    Returns fd_map: { fd_int : player_id }
-    """
-    fd_map = {}
-    for p in players:
-        path = _p2d_path(str(p))
-        try:
-            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-            fd_map[fd] = p
-        except OSError as e:
-            print('[comm] WARNING: cannot open pipe for player %s: %s' % (p, e),
-                  file=sys.stderr)
-    return fd_map
-
-
-def async_recv(fd_map, timeout=1.0):
-    """
-    Non-blocking multiplexed receive using select.select().
-
-    Waits up to *timeout* seconds for any player to write a message.
-    Returns a list of (player_id, message_string) for every pipe that
-    had data ready.
-
-    This replaces the per-player blocking threads used in Virtual
-    Werewolves — a single event-loop iteration handles all N players.
-
-    TIMING SIDE CHANNEL:
-        The dealer's processing time after receiving a message varies by
-        action type:
-          - FOLD   → O(1) list removal; no BankAccount lookup
-          - CALL   → BankAccount.show_balance() + sub_balance() arithmetic
-          - RAISE  → BankAccount arithmetic + re-queue all active players
-        An attacker watching when this pipe's writer-side FIFO transitions
-        from "open()" wait state to "read()" wait state can distinguish
-        fold from raise, leaking hand strength information.
-    """
-    if not fd_map:
-        time.sleep(timeout)
-        return []
+    # ── SAFE ──────────────────────────────────────────────────────────────
     try:
-        readable, _, _ = select.select(list(fd_map.keys()), [], [], timeout)
-    except (ValueError, OSError):
+        # SO_PEERCRED returns { pid, uid, gid } as three C ints
+        cred_bytes = conn.getsockopt(
+            socket.SOL_SOCKET, socket.SO_PEERCRED,
+            struct.calcsize('3i'))
+        pid, uid, gid = struct.unpack('3i', cred_bytes)
+        username = pwd.getpwuid(uid).pw_name   # e.g. "player3"
+        expected = 'player%d' % claimed_id
+        return username == expected
+    except (OSError, KeyError):
+        return False
+
+
+# ── Message framing ───────────────────────────────────────────────────────────
+# Wire format: ":<sender>:<body>\n"
+# We buffer partial reads per connection in a dict keyed by socket fd.
+_recv_buf = {}
+
+def _socket_key(conn):
+    return conn.fileno()
+
+def frame(sender, body):
+    return (':%s:%s\n' % (sender, body)).encode()
+
+def send_to(conn, body, sender='d'):
+    """Send a framed message over *conn*."""
+    try:
+        conn.sendall(frame(sender, body))
+    except OSError:
+        pass
+
+def recv_from(conn):
+    """
+    Read all complete '\n'-delimited messages from *conn*.
+    Returns a list of (sender, body) tuples.
+    Partial messages are kept in an internal buffer.
+    """
+    key = _socket_key(conn)
+    _recv_buf.setdefault(key, b'')
+
+    try:
+        chunk = conn.recv(4096)
+    except BlockingIOError:
+        return []
+    except OSError:
         return []
 
+    if not chunk:
+        return []   # connection closed
+
+    _recv_buf[key] += chunk
     results = []
-    for fd in readable:
-        try:
-            raw = os.read(fd, 4096)
-            if not raw:
-                continue  # EOF (pipe writer closed)
-            data = raw.decode(errors='replace').strip()
-            if not data:
-                continue
-            # Wire format: :<sender>:<message>
-            parts = data.split(':', 2)
-            message = parts[2] if len(parts) >= 3 else data
-            results.append((fd_map[fd], message))
-        except BlockingIOError:
-            pass  # O_NONBLOCK: no data available right now
-        except OSError:
-            pass
+    while b'\n' in _recv_buf[key]:
+        line, _recv_buf[key] = _recv_buf[key].split(b'\n', 1)
+        text = line.decode(errors='replace').strip()
+        if not text:
+            continue
+        parts = text.split(':', 2)
+        if len(parts) >= 3:
+            results.append((parts[1], parts[2]))  # (sender, body)
+        else:
+            results.append(('?', text))
     return results
 
 
-def close_pipes(fd_map):
-    """Close all file descriptors in an fd_map."""
-    for fd in list(fd_map.keys()):
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+def cleanup_conn(conn):
+    key = _socket_key(conn)
+    _recv_buf.pop(key, None)
+    try:
+        conn.close()
+    except OSError:
+        pass
 
 
-# ── Broadcast ────────────────────────────────────────────────────────────────
-def broadcast(msg, players, sender='d'):
+# ── Async multiplexed receive ─────────────────────────────────────────────────
+def async_recv(conn_map, server_sock=None, timeout=1.0):
     """
-    Send *msg* to every player in *players* (dict or iterable of player IDs).
+    select()-based multiplexed receive.
+
+    conn_map       { socket_obj : player_id }  — existing player connections
+    server_sock    if provided, also watches for new incoming connections
+    timeout        seconds to wait
+
+    Returns:
+        messages    [ (player_id, body_string) ]
+        new_conns   [ socket_obj ]  — sockets that just connected
+                                      (only if server_sock was passed)
     """
-    for p in players:
-        send(p, msg, sender)
+    watch = list(conn_map.keys())
+    if server_sock is not None:
+        watch.append(server_sock)
+
+    if not watch:
+        time.sleep(timeout)
+        return [], []
+
+    try:
+        readable, _, _ = select.select(watch, [], watch, timeout)
+    except (ValueError, OSError):
+        return [], []
+
+    messages  = []
+    new_conns = []
+
+    for s in readable:
+        if server_sock is not None and s is server_sock:
+            new_conns.append(accept_client(server_sock))
+        else:
+            player = conn_map.get(s)
+            if player is None:
+                continue
+            for sender, body in recv_from(s):
+                messages.append((player, body))
+
+    return messages, new_conns
 
 
-# ── Dealer log (the target for attacks) ──────────────────────────────────────
-DEALER_LOG = '/home/dealer/log/dealer.log'
+# ── Broadcast helpers ─────────────────────────────────────────────────────────
+def broadcast(body, conn_map, sender='d'):
+    """Send *body* to every socket in *conn_map* ({socket: player_id})."""
+    for conn in conn_map:
+        send_to(conn, body, sender)
 
+def send_player(player_id, body, conn_map, sender='d'):
+    """Send *body* to the socket whose value in conn_map == player_id."""
+    for conn, pid in conn_map.items():
+        if pid == player_id:
+            send_to(conn, body, sender)
+            return
+
+
+# ── Dealer log ────────────────────────────────────────────────────────────────
 def init_dealer_log():
     """
-    Create the dealer's hand log.
-
-    dealerLogMode=1 (VULNERABLE):
-        Step 1: `touch dealer.log`   → file created with umask-derived mode
-                                       (typically 0o644 — world-readable!)
-        Step 2: `chmod 700`          → now restricted to dealer only
-
-        A local user who races between steps 1 and 2 can open() the file
-        for reading before chmod runs, keeping the fd valid even after the
-        permissions are tightened (Linux does not revoke open fds on
-        permission change).
-
-    dealerLogMode=0 (SAFE):
-        Creates the file in a single O_CREAT | O_WRONLY | O_EXCL call
-        with mode 0o600 — the file is never world-readable, even briefly.
+    Create the dealer hand log.  See module docstring for the
+    race-condition vulnerability when dealerLogMode=1.
     """
+    os.makedirs(os.path.dirname(DEALER_LOG), exist_ok=True)
     if dealerLogMode == 1:
         # ── VULNERABLE ────────────────────────────────────────────────────
         os.system('touch %s' % DEALER_LOG)
-        time.sleep(0.05)          # exaggerate the race window for the lab
+        time.sleep(0.05)             # exaggerate the race window
         os.system('chmod 700 %s' % DEALER_LOG)
     else:
         # ── SAFE ──────────────────────────────────────────────────────────
@@ -239,23 +297,43 @@ def init_dealer_log():
 
 
 def log_hands(hands, hand_num):
-    """
-    Append every player's hole cards to the dealer log.
-
-    This is the *secret* that side-channel/injection attacks aim to read.
-    The dealer is the only user with read permission on dealer.log —
-    but see init_dealer_log() for the race-condition window, and
-    send() for the command-injection path.
-    """
+    """Append every player's hole cards to dealer.log."""
     try:
         with open(DEALER_LOG, 'a') as f:
             f.write('=== Hand #%d ===\n' % hand_num)
-            for player, cards in sorted(hands.items()):
+            for pid, cards in sorted(hands.items()):
                 f.write('  Player %s: %s  %s\n' % (
-                    player,
+                    pid,
                     str(cards[0]) if cards else '?',
                     str(cards[1]) if len(cards) > 1 else '?'))
             f.write('\n')
     except OSError as e:
         print('[comm] WARNING: could not write dealer log: %s' % e,
               file=sys.stderr)
+
+
+def log_chat(player_id, text):
+    """
+    Append a chat message to chat.log.
+
+    readVulnerability_2=1 (VULNERABLE):
+        Builds a shell command from raw *text* and passes it to
+        os.popen().  Any shell metacharacter in *text* executes
+        as the dealer user.
+        Example injection:
+            CHAT:hi"; cat /home/dealer/log/dealer.log > /tmp/stolen;"
+
+    readVulnerability_2=0 (SAFE):
+        Writes directly to the file; no shell is involved.
+    """
+    os.makedirs(os.path.dirname(CHAT_LOG), exist_ok=True)
+    if readVulnerability_2 == 1:
+        # ── VULNERABLE ────────────────────────────────────────────────────
+        # text is raw, unsanitized player input
+        cmd = 'echo "Player %s: %s" >> %s' % (player_id, text, CHAT_LOG)
+        o = os.popen(cmd)
+        o.close()
+    else:
+        # ── SAFE ──────────────────────────────────────────────────────────
+        with open(CHAT_LOG, 'a') as f:
+            f.write('Player %s: %s\n' % (player_id, text))
