@@ -7,11 +7,7 @@ Creates playerN Unix accounts (0..N-1) and the named pipes under
 
 Usage:
     python3 makepoker_users.py <num_players>
-
-Pipe layout for player N:
-  /home/dealer/pipes/<N>todD/<N>tod   player→dealer FIFO
-  /home/dealer/pipes/dto<N>D/dto<N>   dealer→player FIFO
-
+    
 Permission logic (mirrors Virtual Werewolves mkusr.sh):
   <N>todD/         chmod 350   owner=player(wx)  group=dealer(r-x)
   <N>todD/<N>tod   chmod 660   player rw, dealer rw
