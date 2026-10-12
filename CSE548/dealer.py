@@ -10,7 +10,7 @@ Usage:
 import sys, os, time
 sys.path.insert(0, '/home/dealer')
 
-from cards   import Deck, Card
+from cards import Deck
 from banking import BankAccount
 from poker_communication import (
     SOCKET_PATH,

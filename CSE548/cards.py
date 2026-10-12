@@ -36,15 +36,15 @@ class Deck:
             return "10"
         return rank[0]
     def translate_suit(self, suit): # Reads the suit of the card and returns the corresponding symbol
-        match suit:
-            case "Spades":
+        match suit.lower():
+            case "spades":
                 return "♠"
-            case "Hearts":
+            case "hearts":
                 return "♥"
-            case "Diamonds":
+            case "diamonds":
                 return "♦"
-            case "Clubs":
-                return "♦"
+            case "clubs":
+                return "♣"
     def create_concealed_hand(self, cards):
         for i in cards:
             sys.stdout.write(" _____  ")
