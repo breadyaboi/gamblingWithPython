@@ -25,9 +25,9 @@ Running this game is pretty much exactly like running werewolves, but if you don
 5. Enjoy
 ## 2. Game rules
 ### MULTIPLAYER (FOR CSE548)
-This is essentially Texas Hold-em poker, it a very famous card game and so rules for this game can be explained way better elsewhere than what I can do, so here's a website explaining it: https://bicyclecards.com/how-to-play/texas-holdem-poker
+- This is essentially Texas Hold-em poker, it a very famous card game and so rules for this game can be explained way better elsewhere than what I can do, so here's a website explaining it: https://bicyclecards.com/how-to-play/texas-holdem-poker
 UI-Wise
-You are given a base amount of $1000 to bet with and if you lose all of your money then you can no longer play.
-Calling and folding you can just type in **call** and **fold** in any case to use the action.
-The syntax for raising the pot is **raise:[dollar amount]**
-You can chat to other players using **chat:[words]**
+- You are given a base amount of $1000 to bet with and if you lose all of your money then you can no longer play.
+- Calling and folding you can just type in **call** and **fold** in any case to use the action.
+- The syntax for raising the pot is **raise:[dollar amount]**
+- You can chat to other players using **chat:[words]**
