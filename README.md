@@ -1,7 +1,7 @@
 # gamblingWithPython
 ### Gamble. With Python
-##1. Running the Game
-###MULTIPLAYER (FOR CSE548)
+## 1. Running the Game
+### MULTIPLAYER (FOR CSE548)
 Running this game is pretty much exactly like running werewolves, but if you don't know what werewolves is or you haven't done the assignment, then here's how to run it.
 1. Open the Releases page in this Github repository and download either the tar or the zip file within your Ubuntu or any other VM of choice.
 2. Extract the file into a folder.
@@ -17,14 +17,14 @@ Running this game is pretty much exactly like running werewolves, but if you don
 8. Within the dealer account, run dealer.py with ```python3 dealer.py```, which will set up a socket for players to connect to.
 9. Within each of the player accounts, run poker_client.py with ```python3 poker_client.py```, which will connect the player to the dealer socket.
 10. Enjoy gambling in poker.
-###SINGLEPLAYER (FOR MY OWN INTERESTS/POSSIBLY YOUR PLEASURE)
+### SINGLEPLAYER (FOR MY OWN INTERESTS/POSSIBLY YOUR PLEASURE)
 1. Download the GamblePython zip folder.
 2. Extract the zip.
 3. Open a terminal in the folder.
 4. Run ```python3 main.py```
 5. Enjoy
-##2. Game rules
-###MULTIPLAYER (FOR CSE548)
+## 2. Game rules
+### MULTIPLAYER (FOR CSE548)
 This is essentially Texas Hold-em poker, it a very famous card game and so rules for this game can be explained way better elsewhere than what I can do, so here's a website explaining it: https://bicyclecards.com/how-to-play/texas-holdem-poker
 UI-Wise
 You are given a base amount of $1000 to bet with and if you lose all of your money then you can no longer play.
