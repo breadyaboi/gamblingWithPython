@@ -36,15 +36,15 @@ class Deck:
             return "10"
         return rank[0]
     def translate_suit(self, suit): # Reads the suit of the card and returns the corresponding symbol
-        match suit:
-            case "Spades":
+        match suit.lower():
+            case "spades":
                 return "♠"
-            case "Hearts":
+            case "hearts":
                 return "♥"
-            case "Diamonds":
+            case "diamonds":
                 return "♦"
-            case "Clubs":
-                return "♦"
+            case "clubs":
+                return "♣"
     def create_concealed_hand(self, cards):
         for i in cards:
             sys.stdout.write(" _____  ")
@@ -84,13 +84,4 @@ class Deck:
     def __str__(self):#returns how many cards are left in the deck
         return f'Deck of {len(self.cards)} cards'
 
-'''deck = Deck()
-deck.shuffle()
-card = deck.draw_card()
-hand = []
-hand.append(card)
-hand.append(deck.draw_card())
-for i in hand:
-    print(i)
-print(deck.create_hand(hand))'''
     
