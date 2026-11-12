@@ -4,16 +4,20 @@ dealer.py  (Project #2 — sandboxed, privilege-separated edition)
 Multiplayer Texas Hold'em server.
 
 Usage:
-    sudo -u dealer python3 /home/dealer/dealer.py <num_players>
-    (or start it as root; the engine drops to the `dealer` user itself)
+    sudo python3 /opt/poker-dealer/dealer.py <num_players>
+    (root is needed to create the engine's cgroup; the engine itself drops to
+     the `dealer` user before it talks to anyone)
 
 Options:
-    --timeout=<sec>     seconds a player has to act        (default 30)
-    --no-sandbox        skip seccomp, for debugging only
-    --require-sandbox   refuse to run if seccomp can't be installed
+    --timeout=<sec>     seconds a player has to act          (default 30)
+    --memory=<MB>       engine memory limit (cgroup)         (default 256)
+    --cpu=<percent>     engine CPU limit, % of one core      (default 50)
+    --require-sandbox   refuse to run without the cgroup and seccomp
+    --no-sandbox        skip cgroup + seccomp, for debugging only
 
 Process layout:
-    supervisor ──fork──> engine (sandboxed; see sandbox.py)
+    supervisor (root) ──fork──> engine (cgroup + dealer user + seccomp;
+                                        see sandbox.py)
 """
 
 import sys, os, time, pwd, grp
@@ -32,7 +36,7 @@ import sandbox
 STARTING_BALANCE = 1000
 SMALL_BLIND      = 10
 BIG_BLIND        = 20
-ACTION_TIMEOUT   = 30.0
+ACTION_TIMEOUT   = 60.0
 RECONNECT_WAIT   = 60.0      # how long to wait for a disconnected player before ending
 BETWEEN_HANDS    = 3.0
 
@@ -544,38 +548,61 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     flags = [a for a in sys.argv[1:] if a.startswith('--')]
     if not args or not args[0].isdigit() or not 2 <= int(args[0]) <= 16:
-        print('Usage: python3 dealer.py <num_players 2-16> '
-              '[--timeout=<s>] [--no-sandbox] [--require-sandbox]')
+        print('Usage: sudo python3 dealer.py <num_players 2-16> [--timeout=<s>]\n'
+              '       [--memory=<MB>] [--cpu=<percent of one core>]\n'
+              '       [--require-sandbox] [--no-sandbox]')
         sys.exit(1)
     n = int(args[0])
-    timeout = ACTION_TIMEOUT
+    opts = {'timeout': ACTION_TIMEOUT, 'memory': ENGINE_MEMORY_MB, 'cpu': ENGINE_CPU_PERCENT}
     for f in flags:
-        if f.startswith('--timeout='):
-            timeout = max(5.0, float(f.split('=', 1)[1]))
+        key, _, val = f[2:].partition('=')
+        if key in opts and val:
+            opts[key] = float(val)
+    timeout = max(5.0, opts['timeout'])
+    sandboxed = '--no-sandbox' not in flags
+    require = '--require-sandbox' in flags
 
     uid_map = resolve_seats(n)
     as_root = os.geteuid() == 0
+    if sandboxed and not as_root:
+        msg = 'the engine cgroup needs root: start with  sudo python3 %s %d' % (sys.argv[0], n)
+        if require:
+            sys.exit('[dealer] ' + msg)
+        log('WARNING: %s (continuing WITHOUT a cgroup)' % msg)
     owner = pwd.getpwnam('dealer').pw_uid if as_root else -1
     try:
         gid = grp.getgrnam(pc.PLAYER_GROUP).gr_gid
     except KeyError:
         gid = -1
 
-    # Supervisor: create the socket, then hand everything else to the engine.
+    # Supervisor (root): socket + cgroup, then hand everything else to the engine.
+    cgroup = None
+    if sandboxed and as_root:
+        cgroup = sandbox.EngineCgroup(memory_mb=opts['memory'], cpu_percent=opts['cpu'],
+                                      pids_max=ENGINE_PIDS_MAX)
+        try:
+            cgroup.create(tag=os.getpid())
+        except sandbox.CgroupError as e:
+            cgroup = None
+            if require:
+                sys.exit('[dealer] %s' % e)
+            log('WARNING: %s (continuing WITHOUT a cgroup)' % e)
     srv_sock = pc.create_server_socket(owner_uid=owner, group_gid=gid)
     log('Starting dealer — %d seats on %s' % (n, pc.SOCKET_PATH))
 
     def engine():
+        if cgroup:
+            cgroup.join()                       # while still root
+            log('Engine pid %d placed in %s' % (os.getpid(), cgroup.describe()))
         if as_root:
             sandbox.drop_privileges('dealer')
         dealer_log = SecureLog(pc.DEALER_LOG)   # opened before the filter goes up
         chat_log = SecureLog(pc.CHAT_LOG)
         server = Server(srv_sock, uid_map, chat_log=chat_log)
-        if '--no-sandbox' in flags:
+        if not sandboxed:
             log('WARNING: running WITHOUT the sandbox')
         else:
-            applied = sandbox.enter_sandbox(max_fds=n + MAX_EXTRA_FDS,
-                                            require='--require-sandbox' in flags)
+            applied = sandbox.enter_sandbox(require=require)
             log('Engine pid %d sandboxed as uid %d: %s' % (
                 os.getpid(), os.getuid(), ', '.join(applied)))
         table = Table(server, sorted(uid_map.values()), dealer_log, timeout)
@@ -596,14 +623,30 @@ def main():
             os.unlink(pc.SOCKET_PATH)
         except OSError:
             pass
-        log('Supervisor: socket removed, exiting.')
+        if cgroup:
+            st = cgroup.stats()
+            parts = []
+            if 'memory_peak' in st:
+                parts.append('peak memory %.1f MB' % (st['memory_peak'] / 1048576))
+            if 'cpu_ms' in st:
+                parts.append('CPU %.1f s' % (st['cpu_ms'] / 1000))
+            if st.get('throttled'):
+                parts.append('CPU-throttled %d times' % st['throttled'])
+            if st.get('oom_kills'):
+                parts.append('OOM-KILLED by the memory limit')
+            if st.get('pids_refused'):
+                parts.append('%d process creations refused' % st['pids_refused'])
+            log('Engine resource usage: %s' % (', '.join(parts) or 'n/a'))
+            cgroup.destroy()
+        log('Supervisor: socket%s removed, exiting.' % (' and cgroup' if cgroup else ''))
 
     sys.exit(sandbox.supervise(engine, cleanup))
 
 
-# fds the engine needs beyond one per player: stdio, logs, listening socket,
-# pending connections (MAX_PENDING) and some headroom for Python itself.
-MAX_EXTRA_FDS = 16 + pc.MAX_PENDING
+# Engine cgroup defaults (override with --memory= / --cpu=)
+ENGINE_MEMORY_MB   = 256    # the engine normally uses ~15 MB
+ENGINE_CPU_PERCENT = 50     # of one core
+ENGINE_PIDS_MAX    = 1      # the engine is single-threaded and never forks
 
 if __name__ == '__main__':
     main()

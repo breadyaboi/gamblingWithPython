@@ -189,9 +189,11 @@ def create_server_socket(path=SOCKET_PATH, owner_uid=-1, group_gid=-1):
         srv.bind(path)
     finally:
         os.umask(old_umask)
+    # The umask above already made it 0660.  No chmod afterwards: the dealer is
+    # started as root, and chmod follows symlinks, so a file swapped in after
+    # bind() could trick root into chmod-ing something else.  lchown never follows.
     if owner_uid != -1 or group_gid != -1:
-        os.chown(path, owner_uid, group_gid)
-    os.chmod(path, 0o660)
+        os.chown(path, owner_uid, group_gid, follow_symlinks=False)
     srv.listen(16)
     srv.setblocking(False)
     return srv

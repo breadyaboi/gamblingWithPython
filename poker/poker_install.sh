@@ -7,9 +7,14 @@
 #
 # Layout and permissions:
 #   /opt/poker/          root:pokerplayers  0750   shared library + client (read-only)
+#   /opt/poker-dealer/   root:root          0700   dealer.py, sandbox.py
 #   /var/lib/poker/      dealer:pokerplayers 2750  holds game.sock (0660)
-#   /home/dealer/        dealer:dealer      0700   dealer.py, sandbox.py
 #   /home/dealer/log/    dealer:dealer      0700   chat.log, dealer.log (0600)
+#   /sys/fs/cgroup/poker/                          created by the dealer at start
+#
+# The dealer is started as root (to create the engine's cgroup), so its code
+# lives in a root-owned directory: if it sat in /home/dealer, the dealer
+# account could edit code that root later runs.
 #
 # Players are in the `pokerplayers` group only, NOT the dealer group (Project #1
 # put them in the dealer group and made the socket 0777).
@@ -35,15 +40,18 @@ for f in cards.py banking.py poker_communication.py poker_client.py; do
 done
 rm -rf /opt/poker/__pycache__
 
-echo "[install] Dealer files -> /home/dealer"
+echo "[install] Dealer files -> /opt/poker-dealer"
+install -d -o root -g root -m 0700 /opt/poker-dealer
+install -o root -g root -m 0700 dealer.py  /opt/poker-dealer/
+install -o root -g root -m 0600 sandbox.py /opt/poker-dealer/
+rm -rf /opt/poker-dealer/__pycache__
 chown dealer:dealer /home/dealer
 chmod 0700 /home/dealer
-install -o dealer -g dealer -m 0700 dealer.py  /home/dealer/
-install -o dealer -g dealer -m 0600 sandbox.py /home/dealer/
 install -d -o dealer -g dealer -m 0700 /home/dealer/log
-# Remove leftovers from the Project #1 layout
+# Remove leftovers from earlier layouts
 rm -rf /home/dealer/sockets /home/dealer/poker_client.py /home/dealer/cards.py \
-       /home/dealer/banking.py /home/dealer/poker_communication.py
+       /home/dealer/banking.py /home/dealer/poker_communication.py \
+       /home/dealer/dealer.py /home/dealer/sandbox.py
 
 echo "[install] Socket directory -> /var/lib/poker"
 install -d -o dealer -g pokerplayers -m 2750 /var/lib/poker
@@ -61,6 +69,6 @@ done
 echo ""
 echo "[install] Done. $NUM_PLAYERS players created."
 echo ""
-echo "  Start dealer:   sudo -u dealer python3 /home/dealer/dealer.py <num_players>"
+echo "  Start dealer:   sudo python3 /opt/poker-dealer/dealer.py <num_players>"
 echo "  Player login:   sudo su - player0"
 echo "  Player client:  python3 ~/poker_client.py"
