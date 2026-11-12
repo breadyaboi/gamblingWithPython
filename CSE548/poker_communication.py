@@ -32,18 +32,6 @@ SOCKET_PATH = SOCKET_DIR + '/game.sock'   # path clients connect to
 CHAT_LOG    = '/home/dealer/log/chat.log'  # all in-game chat messages
 DEALER_LOG  = '/home/dealer/log/dealer.log'  # each hand's hole cards (dealer-only)
 
-# Mode flags — each controls one aspect of the server's behaviour.
-# Flip a flag from 1 to 0 to switch to the alternative implementation.
-_AUTH_MODE      = 1   # 1 = trust the player_id the client reports
-                      # 0 = verify via SO_PEERCRED (kernel-supplied UID)
-_CHAT_LOG_MODE  = 1   # 1 = write chat to file via os.popen() shell command
-                      # 0 = write chat to file directly with open()
-_LOG_INIT_MODE  = 1   # 1 = create dealer log with os.system('touch ...')
-                      # 0 = create dealer log atomically with os.open()
-_SOCKET_MODE    = 1   # 1 = set socket directory and file permissions to 0o777
-                      # 0 = restrict to 0o750 / 0o660 (dealer group only)
-
-
 # ── Card rendering ────────────────────────────────────────────────────────────
 # Import Deck from cards.py so we can use its translate_rank() / translate_suit()
 # methods and its create_hand() / create_concealed_hand() drawing functions.
@@ -160,13 +148,8 @@ def create_server_socket():
     srv.setblocking(False)
 
     # Set permissions on the socket directory and file
-    if _SOCKET_MODE == 1:
-        os.chmod(SOCKET_DIR,  0o777)
-        os.chmod(SOCKET_PATH, 0o777)
-    else:
-        # Restrict access: dealer group can connect, others cannot
-        os.chmod(SOCKET_DIR,  0o750)
-        os.chmod(SOCKET_PATH, 0o660)
+    os.chmod(SOCKET_DIR,  0o777)
+    os.chmod(SOCKET_PATH, 0o777)
 
     return srv
 
@@ -199,17 +182,7 @@ def authenticate(conn, claimed_id):
     of the process on the other end of a Unix domain socket — these values
     come from the kernel and cannot be forged by the client.
     """
-    if _AUTH_MODE == 1:
-        return True   # trust whatever the client says
-    try:
-        # getsockopt returns 3 packed ints: pid, uid, gid
-        cred = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                               struct.calcsize('3i'))
-        pid, uid, gid = struct.unpack('3i', cred)
-        username = pwd.getpwuid(uid).pw_name   # resolve UID → username
-        return username == ('player%d' % claimed_id)
-    except (OSError, KeyError):
-        return False   # couldn't read credentials — deny access
+    return True   # trust whatever the client says
 
 
 # ── Message framing ───────────────────────────────────────────────────────────
@@ -354,14 +327,9 @@ def init_dealer_log():
         syscall, so it is never readable by anyone but the owner.
     """
     os.makedirs(os.path.dirname(DEALER_LOG), exist_ok=True)
-    if _LOG_INIT_MODE == 1:
-        os.system('touch %s' % DEALER_LOG)
-        time.sleep(0.05)
-        os.system('chmod 700 %s' % DEALER_LOG)
-    else:
-        # O_CREAT | O_WRONLY | O_TRUNC: create (or truncate) with exact permissions
-        fd = os.open(DEALER_LOG, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        os.close(fd)
+    os.system('touch %s' % DEALER_LOG)
+    time.sleep(0.05)
+    os.system('chmod 700 %s' % DEALER_LOG)
 
 def log_hands(hands, hand_num):
     """
@@ -382,23 +350,8 @@ def log_hands(hands, hand_num):
         print('[comm] WARNING: could not write dealer log: %s' % e, file=sys.stderr)
 
 def log_chat(player_id, text):
-    """
-    Append a chat message to the chat log file.
-
-    Mode 1 (_CHAT_LOG_MODE == 1):
-        Passes player_id and text directly into a shell command string via
-        os.popen().  The text argument is not sanitised before being
-        interpolated into the command.
-
-    Mode 0 (_CHAT_LOG_MODE == 0):
-        Writes to the file directly with Python's open(), no shell involved.
-    """
     os.makedirs(os.path.dirname(CHAT_LOG), exist_ok=True)
-    if _CHAT_LOG_MODE == 1:
-        # Build a shell command that appends the chat line to the log file
-        cmd = 'echo "Player %s: %s" >> %s' % (player_id, text, CHAT_LOG)
-        o = os.popen(cmd)
-        o.close()
-    else:
-        with open(CHAT_LOG, 'a') as f:
-            f.write('Player %s: %s\n' % (player_id, text))
+    # Build a shell command that appends the chat line to the log file
+    cmd = 'echo "Player %s: %s" >> %s' % (player_id, text, CHAT_LOG)
+    o = os.popen(cmd)
+    o.close()
