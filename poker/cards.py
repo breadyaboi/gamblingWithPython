@@ -45,6 +45,8 @@ class Deck:
                 return "♦"
             case "clubs":
                 return "♣"
+            case _:
+                return "?"
     def create_concealed_hand(self, cards):
         for i in cards:
             sys.stdout.write(" _____  ")
