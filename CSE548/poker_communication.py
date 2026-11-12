@@ -169,20 +169,19 @@ def authenticate(conn, claimed_id):
     """
     Decide whether the player on conn is allowed to identify as claimed_id.
 
-    Mode 1 (_AUTH_MODE == 1):
-        Accept the claimed ID without verification.  Any client that can
-        reach the socket can claim any player number.
-
-    Mode 0 (_AUTH_MODE == 0):
-        Use SO_PEERCRED to ask the kernel for the connecting process's real
-        UID, then look up its username in /etc/passwd.  The client must be
-        running as the matching playerN Unix account.
-
     SO_PEERCRED is a Linux socket option that returns the PID, UID, and GID
     of the process on the other end of a Unix domain socket — these values
     come from the kernel and cannot be forged by the client.
     """
-    return True   # trust whatever the client says
+    try:
+        # getsockopt returns 3 packed ints: pid, uid, gid
+        cred = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                               struct.calcsize('3i'))
+        pid, uid, gid = struct.unpack('3i', cred)
+        username = pwd.getpwuid(uid).pw_name   # resolve UID → username
+        return username == ('player%d' % claimed_id)
+    except (OSError, KeyError):
+        return False   # couldn't read credentials — deny access
 
 
 # ── Message framing ───────────────────────────────────────────────────────────
@@ -316,15 +315,6 @@ def send_player(pid, body, conn_map, sender='d'):
 def init_dealer_log():
     """
     Create the dealer log file before the game begins.
-
-    Mode 1 (_LOG_INIT_MODE == 1):
-        Uses os.system('touch ...') to create the file, then chmod's it.
-        There is a brief window between creation and the chmod call during
-        which the file exists with default umask permissions.
-
-    Mode 0 (_LOG_INIT_MODE == 0):
-        Creates the file atomically with os.open() and mode 0o600 in one
-        syscall, so it is never readable by anyone but the owner.
     """
     os.makedirs(os.path.dirname(DEALER_LOG), exist_ok=True)
     os.system('touch %s' % DEALER_LOG)
