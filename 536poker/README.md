@@ -28,8 +28,10 @@ Dealer options:
 - `--timeout=<sec>`: time to act (default 30)
 - `--memory=<MB>`: engine memory limit (default 256)
 - `--cpu=<percent>`: engine CPU limit, as a percent of one core (default 50)
-- `--require-sandbox`: refuse to start without the cgroup and seccomp
-- `--no-sandbox`: debugging only
+
+The cgroup and seccomp filter are always required. If either can't be set up
+(not started as root, no cgroup filesystem, an unsupported CPU, an old
+kernel), the dealer refuses to start instead of running unprotected.
 
 Client commands: `FOLD`, `CHECK`, `CALL`, `RAISE:<n>` (or `raise 50`), `ALLIN`,
 `say <text>` / `CHAT:<text>` (to everyone), `@<id> <text>` / `MSG:<id>:<text>`
@@ -39,11 +41,10 @@ Client commands: `FOLD`, `CHECK`, `CALL`, `RAISE:<n>` (or `raise 50`), `ALLIN`,
 
 | File | Installed to | Role |
 |---|---|---|
-| `poker_communication.py` | `/opt/poker/` | **The comms library.** Framing, authentication, routing, limits, logging |
+| `poker_communication.py` | `/opt/poker/` | **The comms and isolation library.** Framing, authentication, routing, limits, logging, plus the isolation mechanism (supervisor, cgroup, seccomp) |
 | `poker_client.py` | `/opt/poker/` (symlinked into each player's home) | Player client: one receiver thread plus the input loop |
 | `cards.py`, `banking.py` | `/opt/poker/` | Deck/rendering and balances (from Project #1) |
 | `dealer.py` | `/opt/poker-dealer/` (root-only) | Game engine: betting, side pots, showdown |
-| `sandbox.py` | `/opt/poker-dealer/` (root-only) | The isolation mechanism: supervisor, cgroup, seccomp |
 | `poker_install.sh` / `poker_uninstall.sh` | — | Setup and teardown |
 
 `makepoker_users.py` was removed. It was left over from the named-pipe version,
@@ -73,7 +74,7 @@ waits for one player to act, everyone else can still chat, send private
 messages, run `WHO`, disconnect or reconnect. Each client runs a receiver thread
 alongside its input loop. The supervisor and engine are separate processes.
 
-## The isolation mechanism (`sandbox.py`)
+## The isolation mechanism (bottom section of `poker_communication.py`)
 
 ```
 supervisor (root, unsandboxed)           engine (sandboxed)
@@ -105,7 +106,8 @@ it accepts its first connection:
   Why the dealer is started as root: creating a cgroup, and moving a process
   into it, needs root. Only the supervisor keeps root, and it never touches
   player input. To keep root from running code the `dealer` account could
-  edit, `dealer.py` and `sandbox.py` are installed in a root-only directory.
+  edit, `dealer.py` is installed in a root-only directory, and the library
+  it imports is root-owned and read-only.
 
 * **seccomp-BPF filter**, built by hand with `ctypes` (no extra packages). The
   kernel returns `EPERM` for:

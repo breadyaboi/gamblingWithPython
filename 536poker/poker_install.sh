@@ -7,7 +7,7 @@
 #
 # Layout and permissions:
 #   /opt/poker/          root:pokerplayers  0750   shared library + client (read-only)
-#   /opt/poker-dealer/   root:root          0700   dealer.py, sandbox.py
+#   /opt/poker-dealer/   root:root          0700   dealer.py
 #   /var/lib/poker/      dealer:pokerplayers 2750  holds game.sock (0660)
 #   /home/dealer/log/    dealer:dealer      0700   chat.log, dealer.log (0600)
 #   /sys/fs/cgroup/poker/                          created by the dealer at start
@@ -35,7 +35,7 @@ usermod -aG pokerplayers dealer
 
 echo "[install] Shared library -> /opt/poker"
 install -d -o root -g pokerplayers -m 0750 /opt/poker
-for f in cards.py banking.py poker_communication.py poker_client.py; do
+for f in cards.py banking.py poker_communication.py poker_client.py attack_client.py; do
     install -o root -g pokerplayers -m 0644 "$f" /opt/poker/
 done
 rm -rf /opt/poker/__pycache__
@@ -43,8 +43,7 @@ rm -rf /opt/poker/__pycache__
 echo "[install] Dealer files -> /opt/poker-dealer"
 install -d -o root -g root -m 0700 /opt/poker-dealer
 install -o root -g root -m 0700 dealer.py  /opt/poker-dealer/
-install -o root -g root -m 0600 sandbox.py /opt/poker-dealer/
-rm -rf /opt/poker-dealer/__pycache__
+rm -rf /opt/poker-dealer/__pycache__ /opt/poker-dealer/sandbox.py   # now part of poker_communication.py
 chown dealer:dealer /home/dealer
 chmod 0700 /home/dealer
 install -d -o dealer -g dealer -m 0700 /home/dealer/log
@@ -64,6 +63,7 @@ for i in $(seq 0 $((NUM_PLAYERS - 1))); do
     gpasswd -d "$U" dealer &>/dev/null || true     # undo Project #1 membership
     rm -f "/home/$U/cards.py" "/home/$U/banking.py" "/home/$U/poker_client.py"
     ln -sf /opt/poker/poker_client.py "/home/$U/poker_client.py"
+    ln -sf /opt/poker/attack_client.py "/home/$U/attack_client.py"
 done
 
 echo ""

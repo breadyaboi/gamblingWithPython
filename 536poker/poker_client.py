@@ -7,7 +7,7 @@ Player client for the Python Poker game.  Run it as your playerN account:
 
 Commands (case-insensitive):
     FOLD   CHECK   CALL   RAISE:<n>   ALLIN
-    CHAT:<text>          message everyone        (shortcut:  say <text>)
+    CHAT:<text>          message everyone        (also:  chat <text>,  say <text>)
     MSG:<id>:<text>      private message to one  (shortcut:  @<id> <text>)
     WHO                  balances and who's connected
     HELP
@@ -107,7 +107,8 @@ def _pretty(msg):
         return ['', '%s>>> Your turn  │  To call: $%s  │  Balance: $%s  │  Pot: $%s  │  %ss%s' % (
                     BOLD, owed, kv.get('balance', '?'), kv.get('pot', '?'),
                     kv.get('timeout', '?'), RESET),
-                '>>> FOLD / %s / RAISE:<n> (min %s) / ALLIN' % (opts, kv.get('min_raise', '?'))]
+                '>>> FOLD / %s / RAISE:<n> (min %s) / ALLIN    chat: CHAT:<text>  @<id> <text>' % (
+                    opts, kv.get('min_raise', '?'))]
     if tag == 'TURN':
         return ['%s%s%s' % ('\033[2m', rest, RESET)]
     if tag == 'ACK':
@@ -162,8 +163,8 @@ def translate(line):
     up = line.upper()
     if up.startswith('CHAT:'):
         return 'CHAT:' + line[5:]
-    if up.startswith('SAY '):
-        return 'CHAT:' + line[4:]
+    if up.startswith('SAY ') or up.startswith('CHAT '):
+        return 'CHAT:' + line.split(' ', 1)[1]
     if up.startswith('MSG:'):
         return 'MSG:' + line[4:]
     if line.startswith('@'):
@@ -176,7 +177,7 @@ def translate(line):
         return 'ALLIN' if up == 'ALL-IN' else up
     if up.startswith('RAISE') or up.startswith('BET'):
         return up.replace(' ', ':', 1).replace('::', ':')
-    out('%s[!] Unknown command. FOLD CHECK CALL RAISE:<n> ALLIN  say <text>  @<id> <text>  WHO%s'
+    out('%s[!] Unknown command. FOLD CHECK CALL RAISE:<n> ALLIN  CHAT:<text>  @<id> <text>  WHO%s'
         % (RED, RESET))
     return None
 
@@ -185,7 +186,7 @@ def main():
     print('╔══════════════════════════════════════╗')
     print('║       PYTHON POKER  –  Player %-2d     ║' % PLAYER_ID)
     print('║  FOLD CHECK CALL RAISE:<n> ALLIN     ║')
-    print('║  say <text>   @<id> <text>   WHO     ║')
+    print('║  CHAT:<text>  @<id> <text>  WHO      ║')
     print('╚══════════════════════════════════════╝')
     try:
         connect()

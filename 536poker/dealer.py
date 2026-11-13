@@ -12,12 +12,14 @@ Options:
     --timeout=<sec>     seconds a player has to act          (default 30)
     --memory=<MB>       engine memory limit (cgroup)         (default 256)
     --cpu=<percent>     engine CPU limit, % of one core      (default 50)
-    --require-sandbox   refuse to run without the cgroup and seccomp
-    --no-sandbox        skip cgroup + seccomp, for debugging only
+
+The cgroup and the seccomp filter are always required: if either can't be set
+up (not root, no cgroup filesystem, unsupported CPU, old kernel), the dealer
+refuses to start rather than run unprotected.
 
 Process layout:
     supervisor (root) ──fork──> engine (cgroup + dealer user + seccomp;
-                                        see sandbox.py)
+                                        see poker_communication.py)
 """
 
 import sys, os, time, pwd, grp
@@ -25,18 +27,16 @@ from collections import Counter
 from itertools import combinations
 
 sys.path.insert(0, '/opt/poker')
-sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
 
 from cards import Deck
 from banking import BankAccount
 import poker_communication as pc
 from poker_communication import Server, SecureLog, render_cards
-import sandbox
 
 STARTING_BALANCE = 1000
 SMALL_BLIND      = 10
 BIG_BLIND        = 20
-ACTION_TIMEOUT   = 60.0
+ACTION_TIMEOUT   = 30.0
 RECONNECT_WAIT   = 60.0      # how long to wait for a disconnected player before ending
 BETWEEN_HANDS    = 3.0
 
@@ -549,8 +549,7 @@ def main():
     flags = [a for a in sys.argv[1:] if a.startswith('--')]
     if not args or not args[0].isdigit() or not 2 <= int(args[0]) <= 16:
         print('Usage: sudo python3 dealer.py <num_players 2-16> [--timeout=<s>]\n'
-              '       [--memory=<MB>] [--cpu=<percent of one core>]\n'
-              '       [--require-sandbox] [--no-sandbox]')
+              '       [--memory=<MB>] [--cpu=<percent of one core>]')
         sys.exit(1)
     n = int(args[0])
     opts = {'timeout': ACTION_TIMEOUT, 'memory': ENGINE_MEMORY_MB, 'cpu': ENGINE_CPU_PERCENT}
@@ -559,52 +558,44 @@ def main():
         if key in opts and val:
             opts[key] = float(val)
     timeout = max(5.0, opts['timeout'])
-    sandboxed = '--no-sandbox' not in flags
-    require = '--require-sandbox' in flags
 
+    if os.geteuid() != 0:
+        sys.exit('[dealer] the engine cgroup needs root: start with  '
+                 'sudo python3 %s %d' % (sys.argv[0], n))
     uid_map = resolve_seats(n)
-    as_root = os.geteuid() == 0
-    if sandboxed and not as_root:
-        msg = 'the engine cgroup needs root: start with  sudo python3 %s %d' % (sys.argv[0], n)
-        if require:
-            sys.exit('[dealer] ' + msg)
-        log('WARNING: %s (continuing WITHOUT a cgroup)' % msg)
-    owner = pwd.getpwnam('dealer').pw_uid if as_root else -1
+    owner = pwd.getpwnam('dealer').pw_uid
     try:
         gid = grp.getgrnam(pc.PLAYER_GROUP).gr_gid
     except KeyError:
         gid = -1
 
     # Supervisor (root): socket + cgroup, then hand everything else to the engine.
-    cgroup = None
-    if sandboxed and as_root:
-        cgroup = sandbox.EngineCgroup(memory_mb=opts['memory'], cpu_percent=opts['cpu'],
-                                      pids_max=ENGINE_PIDS_MAX)
-        try:
-            cgroup.create(tag=os.getpid())
-        except sandbox.CgroupError as e:
-            cgroup = None
-            if require:
-                sys.exit('[dealer] %s' % e)
-            log('WARNING: %s (continuing WITHOUT a cgroup)' % e)
+    cgroup = pc.EngineCgroup(memory_mb=opts['memory'], cpu_percent=opts['cpu'],
+                             pids_max=ENGINE_PIDS_MAX)
+    try:
+        cgroup.create(tag=os.getpid())
+    except pc.CgroupError as e:
+        sys.exit('[dealer] refusing to start: %s' % e)
     srv_sock = pc.create_server_socket(owner_uid=owner, group_gid=gid)
     log('Starting dealer — %d seats on %s' % (n, pc.SOCKET_PATH))
 
     def engine():
-        if cgroup:
-            cgroup.join()                       # while still root
-            log('Engine pid %d placed in %s' % (os.getpid(), cgroup.describe()))
-        if as_root:
-            sandbox.drop_privileges('dealer')
+        cgroup.join()                           # while still root
+        if not cgroup.contains(os.getpid()):
+            log('refusing to start: engine is not in its cgroup')
+            return 1
+        log('Engine pid %d placed in %s' % (os.getpid(), cgroup.describe()))
+        pc.drop_privileges('dealer')
         dealer_log = SecureLog(pc.DEALER_LOG)   # opened before the filter goes up
         chat_log = SecureLog(pc.CHAT_LOG)
         server = Server(srv_sock, uid_map, chat_log=chat_log)
-        if not sandboxed:
-            log('WARNING: running WITHOUT the sandbox')
-        else:
-            applied = sandbox.enter_sandbox(require=require)
-            log('Engine pid %d sandboxed as uid %d: %s' % (
-                os.getpid(), os.getuid(), ', '.join(applied)))
+        try:
+            applied = pc.enter_sandbox()
+        except pc.SandboxError as e:            # no player has been accepted yet
+            log('refusing to start: %s' % e)
+            return 1
+        log('Engine pid %d sandboxed as uid %d: %s' % (
+            os.getpid(), os.getuid(), ', '.join(applied)))
         table = Table(server, sorted(uid_map.values()), dealer_log, timeout)
         try:
             table.run()
@@ -623,24 +614,23 @@ def main():
             os.unlink(pc.SOCKET_PATH)
         except OSError:
             pass
-        if cgroup:
-            st = cgroup.stats()
-            parts = []
-            if 'memory_peak' in st:
-                parts.append('peak memory %.1f MB' % (st['memory_peak'] / 1048576))
-            if 'cpu_ms' in st:
-                parts.append('CPU %.1f s' % (st['cpu_ms'] / 1000))
-            if st.get('throttled'):
-                parts.append('CPU-throttled %d times' % st['throttled'])
-            if st.get('oom_kills'):
-                parts.append('OOM-KILLED by the memory limit')
-            if st.get('pids_refused'):
-                parts.append('%d process creations refused' % st['pids_refused'])
-            log('Engine resource usage: %s' % (', '.join(parts) or 'n/a'))
-            cgroup.destroy()
-        log('Supervisor: socket%s removed, exiting.' % (' and cgroup' if cgroup else ''))
+        st = cgroup.stats()
+        parts = []
+        if 'memory_peak' in st:
+            parts.append('peak memory %.1f MB' % (st['memory_peak'] / 1048576))
+        if 'cpu_ms' in st:
+            parts.append('CPU %.1f s' % (st['cpu_ms'] / 1000))
+        if st.get('throttled'):
+            parts.append('CPU-throttled %d times' % st['throttled'])
+        if st.get('oom_kills'):
+            parts.append('OOM-KILLED by the memory limit')
+        if st.get('pids_refused'):
+            parts.append('%d process creations refused' % st['pids_refused'])
+        log('Engine resource usage: %s' % (', '.join(parts) or 'n/a'))
+        cgroup.destroy()
+        log('Supervisor: socket and cgroup removed, exiting.')
 
-    sys.exit(sandbox.supervise(engine, cleanup))
+    sys.exit(pc.supervise(engine, cleanup))
 
 
 # Engine cgroup defaults (override with --memory= / --cpu=)
