@@ -910,25 +910,6 @@ def enter_sandbox():
         raise SandboxError('seccomp filter is not active after installing it')
     return applied
 
-    try:
-        _prctl(libc, PR_SET_NO_NEW_PRIVS, 1)
-        applied.append('no_new_privs')
-        prog = build_filter(arch)
-        blob = b''.join(prog)
-        buf = ctypes.create_string_buffer(blob, len(blob))
-        fprog = _SockFprog(len(prog), ctypes.cast(buf, ctypes.c_void_p))
-        if libc.prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER,
-                      ctypes.addressof(fprog), 0, 0) != 0:
-            e = ctypes.get_errno()
-            raise OSError(e, os.strerror(e))
-        applied.append('seccomp-bpf(%d rules)' % len(prog))
-    except OSError as e:
-        if require:
-            raise
-        print('[sandbox] WARNING: seccomp unavailable: %s' % e, file=sys.stderr)
-    return applied
-
-
 def seccomp_status():
     """Value of 'Seccomp:' in /proc/self/status (2 = filter active)."""
     try:
